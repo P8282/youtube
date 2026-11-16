@@ -413,7 +413,8 @@ details p { color: var(--muted); margin: 8px 0 0; }
     'busy': '이미 PiP 전환 중입니다.',
     'exit-failed': 'PiP를 끄지 못했습니다. PiP 창에서 직접 닫아 주세요.',
     'failed': 'PiP를 시작하지 못했습니다.',
-    'timeout': '확장 프로그램이 응답하지 않습니다. 페이지를 새로 고친 뒤 다시 시도하세요.'
+    'timeout': '확장 프로그램이 응답하지 않습니다. 페이지를 새로 고친 뒤 다시 시도하세요.',
+    'reenter-failed': '다음 영상으로 넘어가며 PiP가 꺼졌고 다시 켜지 못했습니다. PiP를 다시 누르세요.'
   };
 
   function ytFrame() {
@@ -472,7 +473,7 @@ details p { color: var(--muted); margin: 8px 0 0; }
       if (was && !pip.active && !pip.pending) say('PiP가 종료되었습니다.');
     } else if (d.type === 'result') {
       pipDone();
-      if (d.ok) say(d.action === 'exit' ? 'PiP를 껐습니다.' : 'PiP로 전환했습니다.');
+      if (d.ok) say(d.action === 'exit' ? 'PiP를 껐습니다.' : d.action === 'reenter' ? '다음 영상도 PiP로 이어서 재생합니다.' : 'PiP로 전환했습니다.');
       else say(PIP_MSG[d.reason] || PIP_MSG.failed);
     }
   });

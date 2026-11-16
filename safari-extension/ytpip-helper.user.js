@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YT PiP 도우미
 // @namespace    https://p8282.github.io/youtube/
-// @version      0.1.0
+// @version      0.2.0
 // @description  유튜브 PiP 플레이어 페이지의 유튜브 영상을 화면 속 화면(PiP)으로 엽니다. (Resources/content.js와 본문 동일)
 // @match        https://www.youtube.com/embed/*
 // @match        https://www.youtube-nocookie.com/embed/*
@@ -34,6 +34,8 @@
   ];
   var TAG = 'ytpip-ext';
   var CONFIRM_MS = 1500;
+  var REARM_MS = 8000;      // 곡 전환으로 꺼진 PiP를 다시 켜 보는 시간
+  var TRACK_CHANGE_MS = 10000; // 곡 전환 구간의 최대 길이(새 영상이 재생되지 않을 때의 안전장치)
 
   // 최상위 페이지 바로 아래의 iframe에서만 동작
   if (window === window.top || window.parent !== window.top) return;
@@ -58,6 +60,9 @@
   if (primary && root) root.setAttribute('data-ytpip-helper', '1');
 
   var busy = false;
+  var wantPip = false;   // 사용자가 켠 PiP를 유지하려는 상태
+  var emptiedAt = 0;     // 곡 전환 구간: 소스를 비운(emptied) 시각, 새 영상이 재생(playing)되면 0
+  var rearmUntil = 0;    // 0이 아니면 이 시각까지 PiP 재진입을 시도
 
   function post(msg) {
     if (!parentOrigin) return;
@@ -85,6 +90,12 @@
     return typeof v.requestPictureInPicture === 'function' && document.pictureInPictureEnabled !== false;
   }
 
+  // 유튜브가 PiP를 막아 둔 경우 사용자 요청이므로 해제한다(PiPifier와 같은 목적)
+  function allowPip(v) {
+    if (v.disablePictureInPicture) v.disablePictureInPicture = false;
+    if (v.hasAttribute('disablepictureinpicture')) v.removeAttribute('disablepictureinpicture');
+  }
+
   // 결과 보고: reply(결과) → 부모 페이지와(있으면) 확장 툴바 호출자 모두에게
   function finish(reply, result) {
     busy = false;
@@ -110,6 +121,8 @@
     busy = true;
 
     if (isPip(v)) {
+      wantPip = false;
+      rearmUntil = 0;
       try {
         if (document.pictureInPictureElement === v && document.exitPictureInPicture) document.exitPictureInPicture().catch(function () {});
         else v.webkitSetPresentationMode('inline');
@@ -122,9 +135,7 @@
 
     if (v.readyState === 0) return finish(reply, { ok: false, reason: 'not-ready' });
 
-    // 유튜브가 PiP를 막아 둔 경우 사용자 요청이므로 해제한다(PiPifier와 같은 목적)
-    if (v.disablePictureInPicture) v.disablePictureInPicture = false;
-    if (v.hasAttribute('disablepictureinpicture')) v.removeAttribute('disablepictureinpicture');
+    allowPip(v);
 
     if (canWebkitPip(v)) {
       // WebKit은 권한이 없으면 예외 없이 무시하므로 실제 진입 여부를 확인한다
@@ -158,10 +169,62 @@
     post({ type: 'state', active: isPip(getVideo()) });
   }
 
+  // 곡이 바뀌면 유튜브 플레이어가 video의 소스를 비우고, WebKit은 소스 없는 video의 PiP를 끈다.
+  // 사용자가 켜 둔 PiP가 그렇게 꺼졌다면 새 영상이 로드되는 대로 다시 켜 본다.
+  // 사용자 동작 없이 호출되므로 브라우저가 허용할 때만 성공한다(WebKit은 거부 시 조용히 무시).
+  function rearmFail() {
+    if (!rearmUntil) return;
+    rearmUntil = 0;
+    wantPip = false;
+    finish(null, { ok: false, reason: 'reenter-failed' });
+  }
+
+  function tryRearm() {
+    if (!rearmUntil) return;
+    if (Date.now() > rearmUntil) return rearmFail();
+    var v = getVideo();
+    if (!v || isPip(v)) return;
+    allowPip(v);
+    if (canWebkitPip(v)) {
+      try { v.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
+    } else if (canStandardPip(v) && v.readyState > 0) {
+      v.requestPictureInPicture().catch(function () {});
+    }
+  }
+
+  function onPresentationChange() {
+    var v = getVideo();
+    if (isPip(v)) {
+      wantPip = true;
+      if (rearmUntil) {
+        rearmUntil = 0;
+        finish(null, { ok: true, action: 'reenter' });
+      }
+    } else if (wantPip && !rearmUntil) {
+      if ((emptiedAt && Date.now() - emptiedAt < TRACK_CHANGE_MS) || (v && !v.currentSrc)) {
+        rearmUntil = Date.now() + REARM_MS;
+        setTimeout(function () { if (rearmUntil && Date.now() >= rearmUntil) rearmFail(); }, REARM_MS + 50);
+        tryRearm();
+      } else {
+        wantPip = false; // 사용자가 PiP 창을 닫음
+      }
+    }
+    sendState();
+  }
+
   // PiP 진입·종료(사용자가 PiP 창을 닫는 경우 포함)를 부모에게 알림
-  if (primary) ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'].forEach(function (name) {
-    document.addEventListener(name, sendState, true);
-  });
+  if (primary) {
+    ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'].forEach(function (name) {
+      document.addEventListener(name, onPresentationChange, true);
+    });
+    // 미디어 이벤트는 버블링되지 않으므로 캡처 단계에서 받는다
+    document.addEventListener('emptied', function () { emptiedAt = Date.now(); }, true);
+    ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'playing'].forEach(function (name) {
+      document.addEventListener(name, tryRearm, true);
+    });
+    // 새 영상이 재생되면 곡 전환 구간 끝: 이후 PiP가 꺼지면 사용자가 닫은 것으로 본다
+    document.addEventListener('playing', function () { emptiedAt = 0; }, true);
+  }
 
   // 부모 페이지 → 확장: { ytpip: 1, type: 'ping' | 'toggle' }
   if (primary) window.addEventListener('message', function (ev) {
