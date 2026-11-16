@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "YT PiP 도우미",
   "description": "유튜브 PiP 플레이어 페이지에 들어 있는 유튜브 영상을 화면 속 화면(PiP)으로 엽니다.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "icons": {
     "48": "images/icon-48.png",
     "96": "images/icon-96.png",
