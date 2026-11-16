@@ -133,6 +133,7 @@ details p { color: var(--muted); margin: 8px 0 0; }
     <button type="button" id="btn-play" class="main">재생</button>
     <button type="button" id="btn-next" aria-label="다음">⏭</button>
     <button type="button" id="btn-repeat">반복 끔</button>
+    <button type="button" id="btn-pip" aria-pressed="false">PiP</button>
     <select id="speed" class="only-video" aria-label="재생 속도">
       <option value="0.5">0.5배</option>
       <option value="0.75">0.75배</option>
@@ -169,6 +170,19 @@ details p { color: var(--muted); margin: 8px 0 0; }
         <li>전체화면 왼쪽 위의 PiP 버튼을 누르거나, 홈 화면으로 쓸어 올립니다.</li>
       </ol>
       <p>설정 → 일반 → 화면 속 화면에서 "자동으로 PIP 시작"이 켜져 있어야 합니다. 영상에 따라 유튜브가 PiP를 막을 수 있습니다.</p>
+    </details>
+  </section>
+
+  <section class="card">
+    <details id="pip-help">
+      <summary>PiP 버튼 사용 조건 (Safari 확장 필요)</summary>
+      <p>유튜브 영상은 다른 사이트(youtube.com)의 iframe 안에 있어서 이 페이지만으로는 PiP를 켤 수 없습니다. Safari 확장 "YT PiP 도우미"를 설치하면 PiP 버튼이 iframe 안의 영상에 직접 PiP를 요청합니다.</p>
+      <ol>
+        <li>Mac의 Xcode로 확장 앱을 빌드해 아이폰에 설치합니다. (저장소의 safari-extension/README.md)</li>
+        <li>설정 → (앱 →) Safari → 확장 프로그램에서 "YT PiP 도우미"를 켜고 youtube.com, youtube-nocookie.com 접근을 허용합니다.</li>
+        <li>영상을 재생한 뒤 PiP 버튼을 누릅니다. 거부되면 영상 화면을 한 번 탭하고 바로 다시 누르거나, 주소창의 페이지 메뉴에 있는 확장 목록에서 "YT PiP 도우미"를 누릅니다.</li>
+      </ol>
+      <p id="pip-ext-state">확장 연결 상태: 감지되지 않음</p>
     </details>
   </section>
 </main>
@@ -384,7 +398,84 @@ details p { color: var(--muted); margin: 8px 0 0; }
   function onReady() {
     ready = true;
     cueCurrent();
+    pipPing();
   }
+
+  // PiP: 유튜브 iframe은 다른 출처라 이 페이지가 안의 video에 접근할 수 없다.
+  // Safari 확장 "YT PiP 도우미"의 content script가 iframe 안에서 요청을 받아 실제 PiP를 실행한다.
+  // 메시지: 페이지 → iframe { ytpip: 1, type: 'ping' | 'toggle' }, iframe → 페이지 { 'ytpip-ext': 1, type: 'hello' | 'state' | 'result' }
+  var pip = { ext: false, active: false, pending: null };
+  var PIP_MSG = {
+    'no-video': '플레이어에 영상이 아직 없습니다. 영상을 고른 뒤 다시 누르세요.',
+    'not-ready': '영상이 아직 준비되지 않았습니다. 재생을 시작한 뒤 다시 누르세요.',
+    'not-allowed': '브라우저가 PiP 요청을 거부했습니다. 영상 화면을 한 번 탭하고 바로 다시 누르거나, 확장 메뉴에서 "YT PiP 도우미"를 누르세요.',
+    'not-supported': '이 브라우저는 영상 PiP를 지원하지 않습니다.',
+    'busy': '이미 PiP 전환 중입니다.',
+    'exit-failed': 'PiP를 끄지 못했습니다. PiP 창에서 직접 닫아 주세요.',
+    'failed': 'PiP를 시작하지 못했습니다.',
+    'timeout': '확장 프로그램이 응답하지 않습니다. 페이지를 새로 고친 뒤 다시 시도하세요.'
+  };
+
+  function ytFrame() {
+    try { return player && player.getIframe ? player.getIframe() : null; } catch (e) { return null; }
+  }
+  function frameOrigin(f) {
+    try { return new URL(f.src).origin; } catch (e) { return null; }
+  }
+  function pipSend(type) {
+    var f = ytFrame(), o = f && frameOrigin(f);
+    if (!o || !f.contentWindow) return false;
+    f.contentWindow.postMessage({ ytpip: 1, type: type }, o);
+    return true;
+  }
+  function pipPing() { pipSend('ping'); }
+
+  function pipRender() {
+    $('btn-pip').textContent = pip.active ? 'PiP 끄기' : 'PiP';
+    $('btn-pip').setAttribute('aria-pressed', String(pip.active));
+    $('pip-ext-state').textContent = '확장 연결 상태: ' + (pip.ext ? '연결됨' : '감지되지 않음');
+  }
+
+  function pipDone() {
+    if (pip.pending) { clearTimeout(pip.pending); pip.pending = null; }
+  }
+
+  function pipToggle() {
+    var q = cur(), it = q.items[q.idx];
+    if (!it) { say('먼저 주소를 추가하세요.'); return; }
+    if (!ready) { say('플레이어를 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+    if (!pip.ext) {
+      say('PiP 버튼은 Safari 확장 "YT PiP 도우미"를 설치하고 켜야 동작합니다. 아래 "PiP 버튼 사용 조건"을 확인하세요.');
+      $('pip-help').open = true;
+      return;
+    }
+    if (pip.pending) { say(PIP_MSG.busy); return; }
+    // 클릭 처리 안에서 바로 보내야 사용자 동작이 iframe으로 함께 전달된다
+    if (!pipSend('toggle')) { say(PIP_MSG['no-video']); return; }
+    say(pip.active ? 'PiP를 끄는 중입니다.' : 'PiP를 여는 중입니다.');
+    pip.pending = setTimeout(function () { pip.pending = null; say(PIP_MSG.timeout); }, 4000);
+  }
+
+  window.addEventListener('message', function (ev) {
+    var f = ytFrame();
+    if (!f || ev.source !== f.contentWindow || ev.origin !== frameOrigin(f)) return;
+    var d = ev.data;
+    if (!d || typeof d !== 'object' || d['ytpip-ext'] !== 1) return;
+    if (d.type === 'hello') {
+      pip.ext = true;
+      pip.active = false;
+      pipRender();
+    } else if (d.type === 'state') {
+      var was = pip.active;
+      pip.active = !!d.active;
+      pipRender();
+      if (was && !pip.active && !pip.pending) say('PiP가 종료되었습니다.');
+    } else if (d.type === 'result') {
+      pipDone();
+      if (d.ok) say(d.action === 'exit' ? 'PiP를 껐습니다.' : 'PiP로 전환했습니다.');
+      else say(PIP_MSG[d.reason] || PIP_MSG.failed);
+    }
+  });
 
   function onStateChange(e) {
     var S = window.YT.PlayerState;
@@ -448,6 +539,7 @@ details p { color: var(--muted); margin: 8px 0 0; }
   $('btn-play').addEventListener('click', togglePlay);
   $('btn-next').addEventListener('click', function () { next(false); });
   $('btn-prev').addEventListener('click', prev);
+  $('btn-pip').addEventListener('click', pipToggle);
   $('btn-shuffle').addEventListener('click', function () { cur().shuffle = !cur().shuffle; save(); render(); });
   $('btn-repeat').addEventListener('click', function () {
     var q = cur();
