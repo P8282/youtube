@@ -51,8 +51,35 @@
 | `Resources/content.js` | iframe 안에서 video를 찾고 PiP 진입·종료, 부모 페이지와 메시지 교환 |
 | `Resources/background.js` | 확장 메뉴 버튼 → content script에 전환 요청, 실패 시 배지 `!` |
 | `Resources/images/` | 아이콘 |
+| `ytpip-helper.user.js` | 유저스크립트판(설치 A). 머리말 + `Resources/content.js`와 같은 본문 |
 
-## 빌드·설치 (Mac + Xcode 필요)
+## 설치 A: 유저스크립트 (Mac·Xcode 불필요)
+
+App Store의 무료 앱 [Userscripts](https://itunes.apple.com/us/app/userscripts/id1463298887)(오픈소스 [quoid/userscripts](https://github.com/quoid/userscripts), 링크는 저장소 README 기준)로 같은 코드를 실행합니다.
+
+1. 아이폰에 "Userscripts" 앱을 설치하고 한 번 엽니다. 처음 열 때 스크립트를 저장할 폴더를 고르라고 하면 아무 폴더나 지정합니다.
+2. 설정 → (앱 →) Safari → 확장 프로그램 → Userscripts를 켭니다.
+   - 웹사이트 권한은 최소한 `youtube.com`과 `youtube-nocookie.com`을 허용해야 합니다.
+   - Userscripts 자체는 모든 사이트 권한을 요청합니다. 확장 앱(설치 B)보다 권한 범위가 넓다는 점이 차이입니다.
+3. Safari에서 아래 주소를 열고, 주소창의 확장 메뉴에서 Userscripts를 눌러 설치합니다.
+   `https://raw.githubusercontent.com/P8282/youtube/main/safari-extension/ytpip-helper.user.js`
+4. 플레이어 페이지를 새로 고치고, "PiP 버튼 사용 조건"의 상태가 **연결됨**인지 확인합니다.
+
+이 방식에서는 확장 메뉴로 실행하는 두 번째 경로가 없습니다. 페이지의 PiP 버튼만 사용합니다.
+
+`ytpip-helper.user.js`의 본문은 `Resources/content.js`와 같습니다. 코드를 고칠 때는 `content.js`를 고친 뒤 유저스크립트 머리말 아래를 다시 붙여 넣으세요.
+
+근거(Userscripts `8b743e37dd7dfc8a510aff4e5e2ab8b1cc9210df`):
+- `public/ext/safari-16.4/manifest.json`: `all_frames: true`
+- `xcode/Ext-Safari/Functions.swift`: iframe 주소에도 `@match`를 검사하고, `@noframes`가 없으면 iframe에도 주입합니다.
+- `src/ext/content-scripts/entry-userscripts.js`: `@inject-into content`이면 확장 실행 환경에서 실행합니다(유튜브 CSP 영향 없음).
+- `src/ext/background/main.js`: `.user.js` 주소를 설치 대상으로 인식합니다.
+
+iOS 앱에서 실제로 iframe에 주입되는지는 **미검증**입니다.
+
+확장 앱과 유저스크립트를 함께 설치해도 페이지 버튼 요청은 한 번만 처리됩니다. iframe의 `data-ytpip-helper` 속성으로 먼저 실행된 쪽만 페이지와 통신합니다.
+
+## 설치 B: 확장 앱 빌드 (Mac + Xcode 필요)
 
 이 저장소의 작업 환경(Linux)에서는 빌드할 수 없었습니다. 아래 절차는 Apple 공식 변환 도구 기준이며 실행해 보지 않았습니다.
 

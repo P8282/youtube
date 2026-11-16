@@ -37,6 +37,12 @@
     else if (ao && ao.length) return; // 허용되지 않은 사이트의 임베드: 아무것도 하지 않음
   } catch (e) {}
 
+  // 확장과 유저스크립트를 함께 설치해도 페이지 버튼 요청은 한 번만 처리(실행 환경은 달라도 DOM은 공유).
+  // 먼저 실행된 쪽이 primary가 되어 페이지와의 메시지를 맡고, 확장 메뉴 요청은 각자 받는다.
+  var root = document.documentElement;
+  var primary = !(root && root.hasAttribute('data-ytpip-helper'));
+  if (primary && root) root.setAttribute('data-ytpip-helper', '1');
+
   var busy = false;
 
   function post(msg) {
@@ -139,12 +145,12 @@
   }
 
   // PiP 진입·종료(사용자가 PiP 창을 닫는 경우 포함)를 부모에게 알림
-  ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'].forEach(function (name) {
+  if (primary) ['enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'].forEach(function (name) {
     document.addEventListener(name, sendState, true);
   });
 
   // 부모 페이지 → 확장: { ytpip: 1, type: 'ping' | 'toggle' }
-  window.addEventListener('message', function (ev) {
+  if (primary) window.addEventListener('message', function (ev) {
     if (ev.source !== window.parent || !allowed(ev.origin)) return;
     var d = ev.data;
     if (!d || typeof d !== 'object' || d.ytpip !== 1) return;
@@ -170,5 +176,5 @@
     });
   }
 
-  post({ type: 'hello', version: 1 });
+  if (primary) post({ type: 'hello', version: 1 });
 })();
