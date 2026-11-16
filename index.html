@@ -94,6 +94,13 @@ li .e { display: block; font-size: 12px; color: var(--accent); }
 li[aria-current="true"] .t { color: var(--accent); font-weight: 600; }
 li .del { border: 0; background: transparent; color: var(--muted); min-width: 40px; min-height: 40px; font-size: 18px; }
 .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+.sub-status { font-size: 13px; color: var(--muted); margin: 8px 0 0; min-height: 1.2em; }
+#results:empty { display: none; }
+li .ch { display: block; font-size: 12px; color: var(--muted); }
+li .add { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; min-width: 44px; min-height: 40px; font-size: 18px; font-weight: 600; }
+.more { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; min-height: 44px; margin-top: 8px; font-weight: 600; }
+#search-key { margin-top: 10px; }
+#key-form { margin-top: 8px; }
 
 details { font-size: 14px; }
 details summary { font-weight: 600; min-height: 32px; cursor: pointer; }
@@ -143,6 +150,35 @@ details p { color: var(--muted); margin: 8px 0 0; }
       <option value="2">2배</option>
     </select>
   </div>
+
+  <section class="card">
+    <form id="search-form" role="search">
+      <input id="search-input" type="search" enterkeyhint="search" autocomplete="off" spellcheck="false"
+             placeholder="유튜브에서 검색" aria-label="유튜브 검색어">
+      <button type="submit">검색</button>
+    </form>
+    <p id="search-status" class="sub-status" role="status" aria-live="polite"></p>
+    <ol id="results" aria-label="검색 결과"></ol>
+    <button type="button" id="btn-more" class="more" hidden>결과 더 보기</button>
+    <details id="search-key">
+      <summary>검색 설정 (YouTube API 키)</summary>
+      <p>앱 안에서 검색하려면 YouTube Data API v3 키가 필요합니다. 키는 이 기기의 브라우저에만 저장되고 다른 곳으로 보내지 않습니다(검색 요청 시 Google에만 전달).</p>
+      <ol>
+        <li>Google Cloud 콘솔(console.cloud.google.com)에서 프로젝트를 만듭니다.</li>
+        <li>API 및 서비스 → 라이브러리에서 "YouTube Data API v3"를 사용 설정합니다.</li>
+        <li>사용자 인증 정보 → 사용자 인증 정보 만들기 → API 키를 만듭니다.</li>
+        <li>키 제한: 애플리케이션 제한은 "웹사이트"로 하고 https://p8282.github.io/* 를 추가, API 제한은 "YouTube Data API v3"만 선택합니다.</li>
+        <li>만든 키를 아래에 붙여넣고 저장합니다. 비워 두고 저장하면 키를 지웁니다.</li>
+      </ol>
+      <form id="key-form">
+        <input id="key-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="API 키" aria-label="YouTube API 키">
+        <button type="submit">저장</button>
+      </form>
+      <p id="key-state">저장된 키: 없음</p>
+      <p>검색 1회에 할당량 100을 쓰므로 기본 할당량(하루 10,000)으로 하루 약 100번 검색할 수 있습니다.</p>
+    </details>
+  </section>
 
   <section class="card">
     <form id="add-form">
@@ -579,6 +615,135 @@ details p { color: var(--muted); margin: 8px 0 0; }
     say('목록에 추가했습니다.');
     if (cur().items.length === 1) playAt(i); else render();
   });
+
+  // 유튜브 검색: YouTube Data API v3 search.list
+  // 키는 이 기기 localStorage 'ytpip.apikey'에만 저장(목록 저장 구조 ytpip.v1과 분리)
+  var API_KEY_STORE = 'ytpip.apikey';
+  var SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
+  var search = { q: '', next: null, seq: 0 };
+  var SEARCH_ERR = {
+    keyInvalid: 'API 키가 올바르지 않습니다. 검색 설정에서 키를 확인하세요.',
+    API_KEY_INVALID: 'API 키가 올바르지 않습니다. 검색 설정에서 키를 확인하세요.',
+    quotaExceeded: '오늘 검색 할당량을 모두 썼습니다. 내일 다시 시도하세요.',
+    RATE_LIMIT_EXCEEDED: '오늘 검색 할당량을 모두 썼습니다. 내일 다시 시도하세요.',
+    accessNotConfigured: 'Google Cloud에서 YouTube Data API v3가 사용 설정되지 않았습니다.',
+    SERVICE_DISABLED: 'Google Cloud에서 YouTube Data API v3가 사용 설정되지 않았습니다.',
+    ipRefererBlocked: '이 주소에서 키 사용이 막혀 있습니다. 키의 웹사이트 제한에 https://p8282.github.io/* 를 추가하세요.',
+    API_KEY_HTTP_REFERRER_BLOCKED: '이 주소에서 키 사용이 막혀 있습니다. 키의 웹사이트 제한에 https://p8282.github.io/* 를 추가하세요.',
+    API_KEY_SERVICE_BLOCKED: '이 키로는 YouTube Data API를 쓸 수 없습니다. 키의 API 제한을 확인하세요.'
+  };
+
+  function getKey() { try { return localStorage.getItem(API_KEY_STORE) || ''; } catch (e) { return ''; } }
+  function setKey(k) {
+    try { if (k) localStorage.setItem(API_KEY_STORE, k); else localStorage.removeItem(API_KEY_STORE); return true; } catch (e) { return false; }
+  }
+  function sSay(msg) { $('search-status').textContent = msg || ''; }
+  function keyRender() { $('key-state').textContent = '저장된 키: ' + (getKey() ? '있음' : '없음'); }
+  function decodeHtml(str) {
+    return new DOMParser().parseFromString(String(str || ''), 'text/html').documentElement.textContent;
+  }
+
+  function searchError(r) {
+    var err = (r.body && r.body.error) || {}, reasons = [];
+    (err.errors || []).forEach(function (x) { if (x && x.reason) reasons.push(x.reason); });
+    (err.details || []).forEach(function (x) { if (x && x.reason) reasons.push(x.reason); });
+    for (var i = 0; i < reasons.length; i++) if (SEARCH_ERR[reasons[i]]) return SEARCH_ERR[reasons[i]];
+    return '검색하지 못했습니다. (' + r.status + (err.message ? ': ' + err.message : '') + ')';
+  }
+
+  function pickResult(id, title, play) {
+    var q = cur(), before = q.items.length;
+    var i = addVideo(id);
+    if (title && !q.items[i].title) q.items[i].title = title;
+    var added = q.items.length !== before;
+    save();
+    if (play) {
+      sSay(added ? '목록에 추가하고 재생합니다.' : '목록에 있던 영상을 재생합니다.');
+      playAt(i);
+    } else {
+      sSay(added ? '목록에 추가했습니다.' : '이미 목록에 있는 영상입니다.');
+      if (added && q.items.length === 1) playAt(i); else render();
+    }
+  }
+
+  function renderResult(it) {
+    var id = it.id.videoId, sn = it.snippet || {};
+    var title = decodeHtml(sn.title), channel = decodeHtml(sn.channelTitle);
+    var li = document.createElement('li');
+    var pick = document.createElement('button');
+    pick.type = 'button'; pick.className = 'pick';
+    var img = document.createElement('img');
+    img.alt = ''; img.loading = 'lazy';
+    img.src = 'https://i.ytimg.com/vi/' + id + '/mqdefault.jpg';
+    var t = document.createElement('span');
+    t.className = 't'; t.textContent = title || id;
+    if (channel) {
+      var ch = document.createElement('span');
+      ch.className = 'ch'; ch.textContent = channel;
+      t.appendChild(ch);
+    }
+    pick.appendChild(img); pick.appendChild(t);
+    pick.addEventListener('click', function () { pickResult(id, title, true); });
+    var add = document.createElement('button');
+    add.type = 'button'; add.className = 'add';
+    add.setAttribute('aria-label', '목록에 추가');
+    add.textContent = '+';
+    add.addEventListener('click', function () { pickResult(id, title, false); });
+    li.appendChild(pick); li.appendChild(add);
+    $('results').appendChild(li);
+  }
+
+  function doSearch(more) {
+    var key = getKey();
+    if (!key) { sSay('검색하려면 아래 "검색 설정"에서 API 키를 먼저 저장하세요.'); $('search-key').open = true; return; }
+    if (!search.q) return;
+    var seq = ++search.seq;
+    var params = { part: 'snippet', type: 'video', videoEmbeddable: 'true', maxResults: '15', q: search.q, key: key };
+    if (more && search.next) params.pageToken = search.next;
+    sSay('검색 중입니다.');
+    $('btn-more').hidden = true;
+    fetch(SEARCH_URL + '?' + new URLSearchParams(params).toString()).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) { return { ok: res.ok, status: res.status, body: body }; });
+    }).then(function (r) {
+      if (seq !== search.seq) return;
+      if (!r.ok) { sSay(searchError(r)); return; }
+      var items = (r.body.items || []).filter(function (it) { return it && it.id && /^[\w-]{11}$/.test(it.id.videoId || ''); });
+      if (!more) $('results').textContent = '';
+      items.forEach(renderResult);
+      search.next = r.body.nextPageToken || null;
+      $('btn-more').hidden = !search.next;
+      sSay(!more && !items.length ? '검색 결과가 없습니다.' : '결과를 누르면 바로 재생하고, +를 누르면 목록에만 추가합니다.');
+    }, function () {
+      if (seq !== search.seq) return;
+      sSay('검색하지 못했습니다. 네트워크 연결을 확인하세요.');
+    });
+  }
+
+  $('search-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var text = $('search-input').value.trim();
+    if (!text) { sSay('검색어를 입력하세요.'); return; }
+    // 유튜브 주소를 넣었으면 검색 대신 바로 추가
+    if (/youtu\.?be|youtube\.com|youtube-nocookie\.com/i.test(text) && parseInput(text)) {
+      $('add-input').value = text;
+      $('search-input').value = '';
+      $('add-form').dispatchEvent(new Event('submit', { cancelable: true }));
+      return;
+    }
+    search.q = text; search.next = null;
+    $('search-input').blur();
+    doSearch(false);
+  });
+  $('btn-more').addEventListener('click', function () { doSearch(true); });
+  $('key-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var k = $('key-input').value.trim();
+    if (!setKey(k)) { sSay('이 브라우저에는 키를 저장할 수 없습니다.'); return; }
+    $('key-input').value = '';
+    keyRender();
+    sSay(k ? 'API 키를 저장했습니다. 이제 검색할 수 있습니다.' : 'API 키를 지웠습니다.');
+  });
+  keyRender();
 
   var seek = $('seek');
   seek.addEventListener('input', function () { dragging = true; });
