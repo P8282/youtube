@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>유튜브 PiP 플레이어</title>
+<style>
+:root {
+  /* 레이아웃: 한 열, 위에서부터 플레이어 → 조작 → 추가 → 목록 */
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --ink: #15181e;
+  --muted: #667085;
+  --line: #e1e4ea;
+  --accent: #d93a3f;
+  --accent-ink: #ffffff;
+  --font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1013;
+    --surface: #191c21;
+    --ink: #eceef2;
+    --muted: #98a0ad;
+    --line: #2b2f37;
+    --accent: #ff676c;
+    --accent-ink: #16090a;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+           max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+main { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { font-size: 18px; margin: 0; font-weight: 700; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.seg { display: flex; background: var(--line); border-radius: 10px; padding: 3px; }
+.seg button { border: 0; background: transparent; padding: 8px 14px; border-radius: 8px; min-height: 38px; color: var(--muted); font-weight: 600; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); }
+
+.banner { background: var(--surface); border: 1px solid var(--accent); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+.banner[hidden] { display: none; }
+
+.stage { background: #000; border-radius: 14px; overflow: hidden; width: 100%; aspect-ratio: 16 / 9; }
+body[data-mode="music"] .stage { width: 200px; height: 200px; aspect-ratio: auto; margin: 0 auto; }
+.stage iframe, .stage #player { width: 100%; height: 100%; display: block; border: 0; }
+
+.now { text-align: center; }
+.now .title { font-weight: 600; overflow-wrap: anywhere; }
+.now .sub { font-size: 13px; color: var(--muted); }
+
+.seek { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.seek input { flex: 1; accent-color: var(--accent); min-width: 0; }
+
+.controls { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.controls button { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; min-width: 48px; min-height: 48px; padding: 0 12px; font-weight: 600; }
+.controls button.main { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); min-width: 72px; }
+.controls button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.controls select { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; min-height: 48px; padding: 0 10px; }
+body[data-mode="music"] .only-video { display: none; }
+body[data-mode="video"] .only-music { display: none; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+form { display: flex; gap: 8px; }
+form input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 0 12px; min-height: 46px; }
+form button { border: 0; background: var(--ink); color: var(--bg); border-radius: 10px; padding: 0 16px; min-height: 46px; font-weight: 600; }
+#status { font-size: 13px; color: var(--muted); margin: 8px 0 0; min-height: 1.2em; }
+
+.listhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.listhead h2 { font-size: 15px; margin: 0; }
+.listhead button { border: 0; background: transparent; color: var(--muted); font-size: 13px; min-height: 36px; }
+ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+li:first-child { border-top: 0; }
+li .pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; text-align: left; padding: 0; min-height: 48px; }
+li img { width: 72px; height: 40px; object-fit: cover; border-radius: 6px; background: var(--line); flex: none; }
+li .t { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+li .e { display: block; font-size: 12px; color: var(--accent); }
+li[aria-current="true"] .t { color: var(--accent); font-weight: 600; }
+li .del { border: 0; background: transparent; color: var(--muted); min-width: 40px; min-height: 40px; font-size: 18px; }
+.empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+details { font-size: 14px; }
+details summary { font-weight: 600; min-height: 32px; cursor: pointer; }
+details ol { list-style: decimal; padding-left: 20px; gap: 4px; display: block; }
+details li { display: list-item; border: 0; padding: 2px 0; }
+details p { color: var(--muted); margin: 8px 0 0; }
+</style>
+</head>
+<body data-mode="video">
+<main>
+  <header>
+    <h1>유튜브 PiP 플레이어</h1>
+    <div class="seg" role="group" aria-label="모드">
+      <button type="button" id="mode-music" aria-pressed="false">음악</button>
+      <button type="button" id="mode-video" aria-pressed="true">동영상</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <div class="stage"><div id="player"></div></div>
+
+  <div class="now">
+    <div class="title" id="now-title">재생할 항목이 없습니다</div>
+    <div class="sub" id="now-sub">아래에 유튜브 주소를 붙여넣으세요</div>
+  </div>
+
+  <div class="seek">
+    <span id="t-cur">0:00</span>
+    <input type="range" id="seek" min="0" max="1000" value="0" aria-label="재생 위치">
+    <span id="t-dur">0:00</span>
+  </div>
+
+  <div class="controls">
+    <button type="button" id="btn-shuffle" class="only-music" aria-pressed="false">셔플</button>
+    <button type="button" id="btn-prev" aria-label="이전">⏮</button>
+    <button type="button" id="btn-play" class="main">재생</button>
+    <button type="button" id="btn-next" aria-label="다음">⏭</button>
+    <button type="button" id="btn-repeat">반복 끔</button>
+    <select id="speed" class="only-video" aria-label="재생 속도">
+      <option value="0.5">0.5배</option>
+      <option value="0.75">0.75배</option>
+      <option value="1" selected>1배</option>
+      <option value="1.25">1.25배</option>
+      <option value="1.5">1.5배</option>
+      <option value="2">2배</option>
+    </select>
+  </div>
+
+  <section class="card">
+    <form id="add-form">
+      <input id="add-input" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="유튜브 영상 또는 재생목록 주소" aria-label="유튜브 주소">
+      <button type="submit">추가</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="card">
+    <div class="listhead">
+      <h2 id="list-title">동영상 목록</h2>
+      <button type="button" id="btn-clear">전체 비우기</button>
+    </div>
+    <ol id="queue"></ol>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>아이폰에서 PiP로 보는 방법</summary>
+      <ol>
+        <li>영상을 재생합니다.</li>
+        <li>플레이어 오른쪽 아래의 전체화면 버튼을 누릅니다.</li>
+        <li>전체화면 왼쪽 위의 PiP 버튼을 누르거나, 홈 화면으로 쓸어 올립니다.</li>
+      </ol>
+      <p>설정 → 일반 → 화면 속 화면에서 "자동으로 PIP 시작"이 켜져 있어야 합니다. 영상에 따라 유튜브가 PiP를 막을 수 있습니다.</p>
+    </details>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var KEY = 'ytpip.v1';
+  var state = {
+    mode: 'video',
+    music: { items: [], idx: 0, repeat: 'all', shuffle: false },
+    video: { items: [], idx: 0, repeat: 'off', shuffle: false }
+  };
+  var player = null;
+  var ready = false;
+  var loadedId = null;
+  var importing = false;
+  var errorStreak = 0;
+  var dragging = false;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var elQueue = $('queue'), elStatus = $('status'), elBanner = $('banner');
+
+  function cur() { return state[state.mode]; }
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      var s = JSON.parse(raw);
+      ['music', 'video'].forEach(function (m) {
+        if (s[m] && Array.isArray(s[m].items)) {
+          state[m].items = s[m].items.filter(function (it) { return it && /^[\w-]{11}$/.test(it.id); })
+            .map(function (it) { return { id: it.id, title: typeof it.title === 'string' ? it.title : '' }; });
+          state[m].idx = Math.max(0, Math.min(Number(s[m].idx) || 0, state[m].items.length - 1));
+          if (['off', 'all', 'one'].indexOf(s[m].repeat) >= 0) state[m].repeat = s[m].repeat;
+          state[m].shuffle = !!s[m].shuffle;
+        }
+      });
+      if (s.mode === 'music' || s.mode === 'video') state.mode = s.mode;
+    } catch (e) { /* 저장소를 못 쓰면 메모리로만 동작 */ }
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  function say(msg) { elStatus.textContent = msg || ''; }
+  function banner(msg) { elBanner.textContent = msg; elBanner.hidden = !msg; }
+
+  function fmt(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    var mm = h ? String(m).padStart(2, '0') : String(m);
+    return (h ? h + ':' : '') + mm + ':' + String(s).padStart(2, '0');
+  }
+
+  // 입력에서 영상 ID / 재생목록 ID 추출
+  function parseInput(text) {
+    text = (text || '').trim();
+    if (!text) return null;
+    if (/^[\w-]{11}$/.test(text)) return { video: text };
+    if (/^(PL|UU|FL|OL)[\w-]{10,}$/.test(text)) return { list: text };
+    var u;
+    try { u = new URL(/^https?:\/\//i.test(text) ? text : 'https://' + text); } catch (e) { return null; }
+    var host = u.hostname.replace(/^(www\.|m\.|music\.)/, '');
+    var video = null, list = u.searchParams.get('list');
+    if (host === 'youtu.be') {
+      video = u.pathname.split('/')[1] || null;
+    } else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      var m = u.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/);
+      video = m ? m[1] : u.searchParams.get('v');
+    } else {
+      return null;
+    }
+    if (video && !/^[\w-]{11}$/.test(video)) video = null;
+    // 자동 생성 믹스(RD...)는 임베드로 불러올 수 없어 영상만 추가
+    if (list && /^RD/.test(list)) list = null;
+    if (list) return { list: list };
+    if (video) return { video: video };
+    return null;
+  }
+
+  function addVideo(id) {
+    var q = cur();
+    for (var i = 0; i < q.items.length; i++) if (q.items[i].id === id) return i;
+    q.items.push({ id: id, title: '' });
+    return q.items.length - 1;
+  }
+
+  function render() {
+    var q = cur();
+    document.body.dataset.mode = state.mode;
+    $('mode-music').setAttribute('aria-pressed', String(state.mode === 'music'));
+    $('mode-video').setAttribute('aria-pressed', String(state.mode === 'video'));
+    $('list-title').textContent = (state.mode === 'music' ? '음악 목록' : '동영상 목록') + ' (' + q.items.length + ')';
+    $('btn-shuffle').setAttribute('aria-pressed', String(q.shuffle));
+    $('btn-repeat').textContent = q.repeat === 'one' ? '한 곡 반복' : q.repeat === 'all' ? '전체 반복' : '반복 끔';
+    $('btn-repeat').setAttribute('aria-pressed', String(q.repeat !== 'off'));
+
+    elQueue.textContent = '';
+    if (!q.items.length) {
+      var p = document.createElement('li');
+      p.className = 'empty';
+      p.textContent = '목록이 비어 있습니다. 위에 주소를 붙여넣어 추가하세요.';
+      elQueue.appendChild(p);
+    }
+    q.items.forEach(function (it, i) {
+      var li = document.createElement('li');
+      if (i === q.idx) li.setAttribute('aria-current', 'true');
+      var pick = document.createElement('button');
+      pick.type = 'button'; pick.className = 'pick';
+      var img = document.createElement('img');
+      img.alt = ''; img.loading = 'lazy';
+      img.src = 'https://i.ytimg.com/vi/' + it.id + '/mqdefault.jpg';
+      var t = document.createElement('span');
+      t.className = 't';
+      t.textContent = it.title || '제목은 재생하면 표시됩니다';
+      if (it.err) {
+        var e = document.createElement('span');
+        e.className = 'e'; e.textContent = it.err;
+        t.appendChild(e);
+      }
+      pick.appendChild(img); pick.appendChild(t);
+      pick.addEventListener('click', function () { playAt(i); });
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'del';
+      del.setAttribute('aria-label', '목록에서 삭제');
+      del.textContent = '×';
+      del.addEventListener('click', function () { removeAt(i); });
+      li.appendChild(pick); li.appendChild(del);
+      elQueue.appendChild(li);
+    });
+
+    var now = q.items[q.idx];
+    $('now-title').textContent = now ? (now.title || '재생을 누르면 시작합니다') : '재생할 항목이 없습니다';
+    $('now-sub').textContent = now ? (q.idx + 1) + ' / ' + q.items.length : '아래에 유튜브 주소를 붙여넣으세요';
+  }
+
+  function playAt(i) {
+    var q = cur();
+    if (!q.items[i]) return;
+    q.idx = i;
+    save(); render();
+    if (!ready) { say('플레이어를 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+    loadedId = q.items[i].id;
+    player.loadVideoById(loadedId);
+  }
+
+  function cueCurrent() {
+    var q = cur(), it = q.items[q.idx];
+    if (!ready) return;
+    if (it) { loadedId = it.id; player.cueVideoById(it.id); }
+    else { loadedId = null; player.stopVideo(); }
+  }
+
+  function removeAt(i) {
+    var q = cur();
+    q.items.splice(i, 1);
+    if (i < q.idx) q.idx--;
+    q.idx = Math.max(0, Math.min(q.idx, q.items.length - 1));
+    save(); render();
+  }
+
+  function next(auto) {
+    var q = cur(), n = q.items.length;
+    if (!n) return;
+    if (auto && q.repeat === 'one') { player.seekTo(0, true); player.playVideo(); return; }
+    var i;
+    if (q.shuffle && n > 1) {
+      do { i = Math.floor(Math.random() * n); } while (i === q.idx);
+    } else {
+      i = q.idx + 1;
+      if (i >= n) {
+        if (auto && q.repeat !== 'all') return;
+        i = 0;
+      }
+    }
+    playAt(i);
+  }
+
+  function prev() {
+    var q = cur(), n = q.items.length;
+    if (!n) return;
+    if (ready && loadedId && player.getCurrentTime() > 3) { player.seekTo(0, true); return; }
+    playAt((q.idx - 1 + n) % n);
+  }
+
+  function togglePlay() {
+    var q = cur(), it = q.items[q.idx];
+    if (!it) { say('먼저 주소를 추가하세요.'); return; }
+    if (!ready) { say('플레이어를 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+    if (loadedId !== it.id) { playAt(q.idx); return; }
+    if (player.getPlayerState() === 1) player.pauseVideo(); else player.playVideo();
+  }
+
+  function setMode(m) {
+    if (m === state.mode) return;
+    state.mode = m;
+    errorStreak = 0;
+    save(); render(); say('');
+    cueCurrent();
+  }
+
+  var ERR = {
+    2: '주소가 올바르지 않습니다',
+    5: '이 기기에서 재생할 수 없습니다',
+    100: '삭제되었거나 비공개인 영상입니다',
+    101: '다른 사이트에서 재생이 막힌 영상입니다',
+    150: '다른 사이트에서 재생이 막힌 영상입니다'
+  };
+
+  function onReady() {
+    ready = true;
+    cueCurrent();
+  }
+
+  function onStateChange(e) {
+    var S = window.YT.PlayerState;
+    if (importing && e.data === S.CUED) {
+      importing = false;
+      var ids = player.getPlaylist() || [];
+      if (!ids.length) { say('재생목록에서 영상을 찾지 못했습니다.'); cueCurrent(); return; }
+      var before = cur().items.length, first = -1;
+      ids.forEach(function (id) { var k = addVideo(id); if (first < 0) first = k; });
+      var added = cur().items.length - before;
+      save();
+      say('재생목록에서 ' + added + '개를 추가했습니다.');
+      cur().idx = first;
+      render();
+      cueCurrent();
+      return;
+    }
+    if (e.data === S.PLAYING) {
+      errorStreak = 0;
+      $('btn-play').textContent = '일시정지';
+      var q = cur(), it = q.items[q.idx];
+      var data = player.getVideoData ? player.getVideoData() : null;
+      if (it && data && data.video_id === it.id) {
+        if (data.title && it.title !== data.title) { it.title = data.title; }
+        if (it.err) delete it.err;
+        save(); render();
+      }
+      var rate = Number($('speed').value);
+      if (state.mode === 'video' && player.getPlaybackRate() !== rate) player.setPlaybackRate(rate);
+      if (state.mode === 'music' && player.getPlaybackRate() !== 1) player.setPlaybackRate(1);
+    } else if (e.data === S.PAUSED || e.data === S.CUED || e.data === S.UNSTARTED) {
+      $('btn-play').textContent = '재생';
+    } else if (e.data === S.ENDED) {
+      $('btn-play').textContent = '재생';
+      next(true);
+    }
+  }
+
+  function onError(e) {
+    if (importing) {
+      importing = false;
+      say('재생목록을 불러오지 못했습니다. 비공개이거나 주소가 잘못되었습니다.');
+      cueCurrent();
+      return;
+    }
+    if (e.data === 153) {
+      banner('유튜브가 이 페이지의 출처를 확인하지 못했습니다. 파일을 직접 여는 대신 https 주소로 올린 뒤 사파리에서 열어 주세요.');
+      return;
+    }
+    var q = cur(), it = q.items[q.idx];
+    var msg = ERR[e.data] || ('재생 오류 (' + e.data + ')');
+    if (it) { it.err = msg; save(); render(); }
+    say(msg);
+    errorStreak++;
+    if (errorStreak < q.items.length) next(true);
+  }
+
+  // 이벤트 연결
+  $('mode-music').addEventListener('click', function () { setMode('music'); });
+  $('mode-video').addEventListener('click', function () { setMode('video'); });
+  $('btn-play').addEventListener('click', togglePlay);
+  $('btn-next').addEventListener('click', function () { next(false); });
+  $('btn-prev').addEventListener('click', prev);
+  $('btn-shuffle').addEventListener('click', function () { cur().shuffle = !cur().shuffle; save(); render(); });
+  $('btn-repeat').addEventListener('click', function () {
+    var q = cur();
+    q.repeat = q.repeat === 'off' ? 'all' : q.repeat === 'all' ? 'one' : 'off';
+    save(); render();
+  });
+  $('speed').addEventListener('change', function () {
+    if (ready) player.setPlaybackRate(Number(this.value));
+  });
+  $('btn-clear').addEventListener('click', function () {
+    var q = cur();
+    q.items = []; q.idx = 0;
+    save(); render();
+    if (ready) { loadedId = null; player.stopVideo(); }
+    say('목록을 비웠습니다.');
+  });
+
+  $('add-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var input = $('add-input');
+    var r = parseInput(input.value);
+    if (!r) { say('유튜브 주소를 인식하지 못했습니다. 영상이나 재생목록 주소를 붙여넣어 주세요.'); return; }
+    if (r.list) {
+      if (!ready) { say('플레이어를 불러오는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+      importing = true;
+      say('재생목록을 불러오는 중입니다.');
+      player.cuePlaylist({ listType: 'playlist', list: r.list });
+      input.value = '';
+      return;
+    }
+    var before = cur().items.length;
+    var i = addVideo(r.video);
+    input.value = '';
+    save();
+    if (cur().items.length === before) { say('이미 목록에 있는 영상입니다.'); render(); return; }
+    say('목록에 추가했습니다.');
+    if (cur().items.length === 1) playAt(i); else render();
+  });
+
+  var seek = $('seek');
+  seek.addEventListener('input', function () { dragging = true; });
+  seek.addEventListener('change', function () {
+    dragging = false;
+    if (!ready || !loadedId) return;
+    var d = player.getDuration();
+    if (d > 0) player.seekTo(d * Number(seek.value) / 1000, true);
+  });
+  setInterval(function () {
+    if (!ready || !loadedId || dragging) return;
+    var d = player.getDuration() || 0, c = player.getCurrentTime() || 0;
+    $('t-cur').textContent = fmt(c);
+    $('t-dur').textContent = fmt(d);
+    seek.value = d > 0 ? String(Math.round(c / d * 1000)) : '0';
+  }, 500);
+
+  // 시작
+  load();
+  render();
+  if (location.protocol === 'file:') {
+    banner('파일을 직접 열면 유튜브 플레이어가 동작하지 않습니다. https 주소로 올린 뒤 사파리에서 열어 주세요.');
+  }
+  window.onYouTubeIframeAPIReady = function () {
+    player = new window.YT.Player('player', {
+      width: '100%',
+      height: '100%',
+      playerVars: { playsinline: 1, rel: 0, fs: 1 },
+      events: { onReady: onReady, onStateChange: onStateChange, onError: onError }
+    });
+  };
+  var tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  tag.onerror = function () {
+    banner('유튜브 플레이어를 불러오지 못했습니다. 네트워크 또는 콘텐츠 차단기 설정을 확인해 주세요.');
+  };
+  document.head.appendChild(tag);
+})();
+</script>
+</body>
+</html>
